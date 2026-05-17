@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+    <title>Web Scraper</title>
+
+    <style>
+
+        body{
+            font-family: Arial;
+            padding: 20px;
+        }
+
+        button{
+            padding: 12px 20px;
+            font-size: 18px;
+            cursor: pointer;
+        }
+
+        .card{
+            border:1px solid #ccc;
+            padding:15px;
+            margin-top:20px;
+            border-radius:10px;
+        }
+
+    </style>
+
+</head>
+
+<body>
+
+    <h1>Selenium Web Scraper</h1>
+
+    <a href="/run">
+
+        <button>
+            Run Scraper
+        </button>
+
+    </a>
+
+    {% if data %}
+
+        {% for item in data %}
+
+            <div class="card">
+
+                <h2>
+                    {{ item.url }}
+                </h2>
+
+                <ul>
+
+                    {% for h1 in item.h1 %}
+
+                        <li>
+                            {{ h1 }}
+                        </li>
+
+                    {% endfor %}
+
+                </ul>
+
+            </div>
+
+        {% endfor %}
+
+    {% endif %}
+
+</body>
+
+</html>
