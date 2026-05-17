@@ -3,8 +3,10 @@ import json
 
 import extract_links
 import extract_h1
+from scheduler import start_scheduler
 
 app = Flask(__name__)
+start_scheduler()
 
 @app.route("/")
 def home():
