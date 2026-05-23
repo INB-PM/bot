@@ -5,10 +5,10 @@
 
 ### 1️⃣ Clone the Repository
 ```bash
-git clone https://github.com/mayank-tagline/e-commerce.git
+git clone https://github.com/INB-PM/bot.git
 ```
 ```bash
-cd e-commerce
+cd bot
 
 ```
 
@@ -35,7 +35,7 @@ python -m venv .venv
 ### 3️⃣ Install Dependencies
 
 ```bash
-pip install -r requirement.txt
+pip install -r requirements.txt
 ```
 
 ---
