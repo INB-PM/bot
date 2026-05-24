@@ -3,26 +3,25 @@ driver_factory.py — Reusable Selenium Chrome driver factory.
 
 Works on both local Windows and Render/Linux.
 
-Strategy:
-  - On Windows: webdriver-manager locates/downloads ChromeDriver automatically.
-    No Chrome options are changed — identical to the original local behaviour.
-  - On Render/Linux: Chrome is installed by render-build.sh during the build
-    phase.  This module probes the known Linux binary locations, sets
-    binary_location explicitly so Selenium never has to guess, and applies
-    headless + sandbox-free options required for a server environment.
-    webdriver-manager is still used to resolve ChromeDriver on Linux too,
-    so there is no hardcoded ChromeDriver path.
+HOW IT WORKS ON RENDER:
+  render-build.sh uses the selenium-manager binary (bundled inside the
+  selenium package) to download Chrome for Testing + ChromeDriver into
+  /opt/render/project/src/.selenium-cache during the build phase.
+  That directory is inside the project repo and persists to the runtime
+  container.
 
-Debug logging:
-  Every create_driver() call logs the platform, PATH, detected Chrome path,
-  and ChromeDriver path so deployment failures are easy to diagnose from
-  Render's log viewer.
+  At runtime, this module sets SE_CACHE_PATH to that same directory before
+  calling webdriver.Chrome(). Selenium Manager finds the cached binaries
+  and uses them — no re-download, no apt-get, no system Chrome needed.
+
+HOW IT WORKS LOCALLY (WINDOWS):
+  webdriver-manager resolves ChromeDriver from the local Chrome installation.
+  No options are changed. Behaviour is identical to the original code.
 """
 
 import os
 import platform
 import logging
-import shutil
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -31,15 +30,9 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 logger = logging.getLogger(__name__)
 
-# Ordered list of Chrome binary locations to probe on Linux.
-# The first one that exists and is executable wins.
-_LINUX_CHROME_CANDIDATES = [
-    "/usr/bin/google-chrome-stable",
-    "/usr/bin/google-chrome",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/chromium",
-    "/snap/bin/chromium",
-]
+# Path where render-build.sh caches Chrome for Testing + ChromeDriver.
+# Must match the --cache-path argument in render-build.sh.
+_RENDER_SE_CACHE = "/opt/render/project/src/.selenium-cache"
 
 
 def _is_render_or_linux() -> bool:
@@ -51,67 +44,63 @@ def _is_render_or_linux() -> bool:
     return False
 
 
-def _find_linux_chrome() -> str:
-    """
-    Probe known Linux Chrome binary locations and return the first one found.
-    Raises RuntimeError with a diagnostic message if none are found.
-    """
-    for candidate in _LINUX_CHROME_CANDIDATES:
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
-
-    # Also try whatever 'google-chrome' resolves to on PATH
-    on_path = shutil.which("google-chrome") or shutil.which("google-chrome-stable") or shutil.which("chromium-browser") or shutil.which("chromium")
-    if on_path:
-        return on_path
-
-    raise RuntimeError(
-        "Chrome binary not found on this Linux host.\n"
-        f"Searched: {_LINUX_CHROME_CANDIDATES}\n"
-        "Also checked PATH via shutil.which — nothing found.\n"
-        "Ensure render-build.sh ran successfully during the Render build phase.\n"
-        "Check the Render build logs for '[3/4] Installing Google Chrome Stable'."
-    )
-
-
 def create_driver() -> webdriver.Chrome:
     """
     Create and return a configured Chrome WebDriver.
 
-    Logs platform, PATH, Chrome binary path, and ChromeDriver path before
-    launching so deployment failures are visible in Render's log viewer.
+    On Render/Linux: points Selenium Manager at the pre-downloaded cache
+    directory and applies headless + sandbox-free Chrome options.
+
+    On Windows: uses webdriver-manager to resolve ChromeDriver from the
+    local Chrome installation. No options changed — identical to original.
 
     Returns
     -------
     webdriver.Chrome
-        A ready-to-use Chrome driver instance.  The caller is responsible
-        for calling driver.quit() when finished.
+        A ready-to-use Chrome driver instance. Caller must call driver.quit().
     """
     # ------------------------------------------------------------------ #
     # Startup diagnostics — always logged, visible in Render log viewer  #
     # ------------------------------------------------------------------ #
-    logger.info("driver_factory: ---- Chrome driver startup diagnostics ----")
-    logger.info(f"driver_factory: OS platform      = {platform.system()} {platform.release()}")
-    logger.info(f"driver_factory: Python version   = {platform.python_version()}")
+    logger.info("driver_factory: ---- startup diagnostics ----")
+    logger.info(f"driver_factory: platform         = {platform.system()} {platform.release()}")
+    logger.info(f"driver_factory: python           = {platform.python_version()}")
     logger.info(f"driver_factory: RENDER env var   = {os.environ.get('RENDER', '(not set)')}")
-    logger.info(f"driver_factory: PATH             = {os.environ.get('PATH', '(not set)')}")
+    logger.info(f"driver_factory: SE_CACHE_PATH    = {os.environ.get('SE_CACHE_PATH', '(not set)')}")
 
     chrome_options = Options()
 
     if _is_render_or_linux():
         # ------------------------------------------------------------------ #
-        # Render / Linux path                                                #
+        # Render / Linux                                                      #
         # ------------------------------------------------------------------ #
-        logger.info("driver_factory: environment = Render/Linux")
+        logger.info("driver_factory: mode = Render/Linux")
 
-        # Locate Chrome binary — probe all known paths
-        chrome_bin = _find_linux_chrome()
-        logger.info(f"driver_factory: Chrome binary    = {chrome_bin}")
+        # Point Selenium Manager at the cache directory populated during build.
+        # This must be set BEFORE webdriver.Chrome() is called so that
+        # Selenium Manager reads it when resolving browser/driver paths.
+        os.environ["SE_CACHE_PATH"] = _RENDER_SE_CACHE
+        logger.info(f"driver_factory: SE_CACHE_PATH set to {_RENDER_SE_CACHE}")
 
-        # Tell Selenium exactly where Chrome is — no guessing
-        chrome_options.binary_location = chrome_bin
+        # Verify the cache directory exists — if not, build script didn't run
+        if not os.path.isdir(_RENDER_SE_CACHE):
+            raise RuntimeError(
+                f"Selenium cache directory not found: {_RENDER_SE_CACHE}\n"
+                "This means render-build.sh did not run or failed.\n"
+                "Check the Render build logs for '[3/4] Downloading Chrome'.\n"
+                "Ensure Build Command is set to: bash render-build.sh"
+            )
 
-        # Headless + sandbox-free options required on a server
+        # Log what's in the cache so we can see it in Render logs
+        try:
+            for root, dirs, files in os.walk(_RENDER_SE_CACHE):
+                for f in files:
+                    full = os.path.join(root, f)
+                    logger.info(f"driver_factory: cache entry: {full}")
+        except Exception:
+            pass
+
+        # Headless + sandbox-free options required on a server without display
         chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
@@ -120,26 +109,22 @@ def create_driver() -> webdriver.Chrome:
         chrome_options.add_argument("--disable-extensions")
         chrome_options.add_argument("--disable-background-networking")
 
-        # webdriver-manager downloads the matching ChromeDriver automatically
-        chromedriver_path = ChromeDriverManager().install()
-        logger.info(f"driver_factory: ChromeDriver path = {chromedriver_path}")
-
-        service = Service(chromedriver_path)
+        # Do NOT pass Service() — Selenium Manager resolves Chrome + ChromeDriver
+        # from SE_CACHE_PATH automatically when no service is provided.
+        logger.info("driver_factory: launching Chrome via Selenium Manager cache")
+        driver = webdriver.Chrome(options=chrome_options)
 
     else:
         # ------------------------------------------------------------------ #
         # Local Windows — original behaviour, completely unchanged           #
         # ------------------------------------------------------------------ #
-        logger.info("driver_factory: environment = local Windows")
+        logger.info("driver_factory: mode = local Windows")
 
-        # Log what Chrome webdriver-manager finds locally
         chromedriver_path = ChromeDriverManager().install()
-        logger.info(f"driver_factory: ChromeDriver path = {chromedriver_path}")
+        logger.info(f"driver_factory: ChromeDriver = {chromedriver_path}")
 
         service = Service(chromedriver_path)
-        # No chrome_options changes — GUI Chrome, no headless
+        driver = webdriver.Chrome(service=service, options=chrome_options)
 
-    logger.info("driver_factory: ---- launching Chrome ----")
-    driver = webdriver.Chrome(service=service, options=chrome_options)
     logger.info("driver_factory: Chrome launched successfully")
     return driver

@@ -1,97 +1,85 @@
 #!/usr/bin/env bash
 # render-build.sh
 #
-# Build Command for Render.com — set this in the Render dashboard:
-#   Build Command: bash render-build.sh
+# Build Command for Render.com.
+# Set in Render dashboard: Build Command = bash render-build.sh
 #
-# Installs Google Chrome directly from the official .deb package using wget.
-# This bypasses the apt-key / apt-repo approach which fails silently on
-# modern Debian containers (apt-key is deprecated; the signed-by method
-# requires extra setup that varies by distro version).
+# WHY THIS APPROACH:
+#   On Render, the build container and runtime container share ONLY the
+#   project directory (/opt/render/project/src/). System-level installs
+#   via apt-get are wiped between build and runtime — that is why every
+#   previous apt-get approach failed.
 #
-# Downloading the .deb directly is the most reliable method on Render.
+#   This script uses Selenium Manager (the binary bundled inside the
+#   selenium Python package at selenium/webdriver/common/linux/selenium-manager)
+#   to download Chrome for Testing + ChromeDriver into a subdirectory of
+#   the project during build. That subdirectory persists to runtime.
+#
+#   At runtime, driver_factory.py sets SE_CACHE_PATH to the same directory
+#   so Selenium Manager finds the cached binaries without re-downloading.
 
-set -e  # Exit immediately on any error — build fails loudly, not silently
+set -e  # Fail loudly on any error
 
 # ---------------------------------------------------------------------------
-# 1. Python dependencies
+# Project directory — the only path that persists from build to runtime
 # ---------------------------------------------------------------------------
+PROJECT_DIR="/opt/render/project/src"
+SE_CACHE="${PROJECT_DIR}/.selenium-cache"
+
 echo "==> [1/4] Installing Python dependencies"
 pip install -r requirements.txt
 
-# ---------------------------------------------------------------------------
-# 2. System libraries Chrome depends on
-# ---------------------------------------------------------------------------
-echo "==> [2/4] Installing Chrome system dependencies"
-apt-get update -y
-apt-get install -y \
-    wget \
-    curl \
-    unzip \
-    ca-certificates \
-    fonts-liberation \
-    libasound2 \
-    libatk-bridge2.0-0 \
-    libatk1.0-0 \
-    libcups2 \
-    libdbus-1-3 \
-    libgdk-pixbuf2.0-0 \
-    libnspr4 \
-    libnss3 \
-    libx11-xcb1 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxrandr2 \
-    libxss1 \
-    libxtst6 \
-    xdg-utils \
-    --no-install-recommends
-
-# ---------------------------------------------------------------------------
-# 3. Download and install Google Chrome Stable .deb directly from Google
-#    This avoids the apt-key / signed-by repo setup entirely.
-# ---------------------------------------------------------------------------
-echo "==> [3/4] Downloading Google Chrome Stable .deb"
-wget -q \
-    "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb" \
-    -O /tmp/google-chrome-stable.deb
-
-echo "==> [3/4] Installing Google Chrome Stable"
-# dpkg -i will fail on missing deps; apt-get -f install fixes them
-dpkg -i /tmp/google-chrome-stable.deb || apt-get install -f -y
-
-# ---------------------------------------------------------------------------
-# 4. Verify Chrome is installed and print version — fails build if missing
-# ---------------------------------------------------------------------------
-echo "==> [4/4] Verifying Chrome installation"
-
-CHROME_BIN=""
-for candidate in \
-    /usr/bin/google-chrome-stable \
-    /usr/bin/google-chrome \
-    /usr/bin/chromium-browser \
-    /usr/bin/chromium; do
-    if [ -x "$candidate" ]; then
-        CHROME_BIN="$candidate"
+echo "==> [2/4] Locating Selenium Manager binary"
+# selenium-manager is bundled inside the installed selenium package
+SM_BIN=$(python -c "
+import os, selenium
+pkg_dir = os.path.dirname(selenium.__file__)
+candidates = [
+    os.path.join(pkg_dir, 'webdriver', 'common', 'linux', 'selenium-manager'),
+    os.path.join(pkg_dir, 'webdriver', 'common', 'macos', 'selenium-manager'),
+]
+for c in candidates:
+    if os.path.isfile(c):
+        print(c)
         break
-    fi
-done
+")
 
-if [ -z "$CHROME_BIN" ]; then
-    echo "ERROR: Chrome binary not found after installation. Build cannot continue."
-    echo "Searched: /usr/bin/google-chrome-stable, /usr/bin/google-chrome, /usr/bin/chromium-browser, /usr/bin/chromium"
+if [ -z "$SM_BIN" ]; then
+    echo "ERROR: selenium-manager binary not found inside the selenium package."
+    echo "Ensure selenium>=4.6.0 is in requirements.txt"
     exit 1
 fi
 
-echo "Chrome binary found at: $CHROME_BIN"
-"$CHROME_BIN" --version
+echo "    selenium-manager found at: $SM_BIN"
+chmod +x "$SM_BIN"
 
 # ---------------------------------------------------------------------------
-# 5. Ensure output directory exists for JSON files
+# [3/4] Use Selenium Manager to download Chrome for Testing + ChromeDriver
+#        into the project directory so they persist to runtime
 # ---------------------------------------------------------------------------
+echo "==> [3/4] Downloading Chrome for Testing + ChromeDriver via Selenium Manager"
+mkdir -p "$SE_CACHE"
+
+"$SM_BIN" \
+    --browser chrome \
+    --cache-path "$SE_CACHE" \
+    --debug
+
+echo ""
+echo "==> Verifying downloaded binaries"
+find "$SE_CACHE" -type f -name "chrome" -o -name "chromedriver" | while read -r f; do
+    echo "    Found: $f"
+    "$f" --version 2>/dev/null || true
+done
+
+# ---------------------------------------------------------------------------
+# [4/4] Ensure output directory exists for JSON files
+# ---------------------------------------------------------------------------
+echo "==> [4/4] Ensuring output directory exists"
 mkdir -p output
 
 echo ""
 echo "==> Build complete."
-echo "    Chrome: $CHROME_BIN"
-echo "    ChromeDriver will be resolved by webdriver-manager at runtime."
+echo "    Selenium cache: $SE_CACHE"
+echo "    Chrome + ChromeDriver are cached in the project directory."
+echo "    driver_factory.py will set SE_CACHE_PATH=$SE_CACHE at runtime."
