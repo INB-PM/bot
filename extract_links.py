@@ -1,17 +1,17 @@
-from selenium import webdriver
 from selenium.webdriver.common.by import By
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.chrome.service import Service
 import json
+
+# Deployment-specific change: driver creation is now handled by driver_factory
+# so that Chrome options are configured correctly for both local Windows and
+# Render/Linux without duplicating setup code here.
+from driver_factory import create_driver
 
 
 def run():
 
-    driver = webdriver.Chrome(
-        service=Service(
-            ChromeDriverManager().install()
-        )
-    )
+    # create_driver() returns a Chrome instance configured for the current
+    # environment (headless + no-sandbox on Render, normal on Windows).
+    driver = create_driver()
 
     websites = [
         "https://bon-news-alpha.vercel.app/",
