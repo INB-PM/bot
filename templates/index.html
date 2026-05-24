@@ -33,6 +33,15 @@
 
     <h1>Selenium Web Scraper</h1>
 
+    {% if error %}
+
+        <div class="card" style="border-color:#c0392b; background:#fff5f5;">
+            <strong>Scraper unavailable:</strong>
+            {{ error }}
+        </div>
+
+    {% endif %}
+
     <a href="/run">
 
         <button>
