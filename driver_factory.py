@@ -1,18 +1,25 @@
 """
 driver_factory.py — Reusable Selenium Chrome driver factory.
 
-Works on both local Windows and Render/Linux without hardcoding paths.
+Works on both local Windows and Render/Linux with zero system dependencies.
 
 Strategy:
-  - webdriver-manager is used in BOTH environments to locate/download
-    ChromeDriver automatically.  This avoids any assumption about where
-    ChromeDriver is installed on the host.
+  - On BOTH environments, we pass no Service() and no binary_location.
+    Selenium 4.6+ ships with "Selenium Manager" — a self-contained binary
+    that automatically downloads the correct Chrome + ChromeDriver for the
+    current platform and caches them locally.  No apt-get, no webdriver-manager,
+    no hardcoded paths required.
   - On Render/Linux, headless + sandbox-free Chrome options are added so
     the browser can run without a display.
   - On Windows, no extra options are applied — behaviour is identical to
     the original code.
-  - If a CHROME_BIN environment variable is set, that path is used as the
-    Chrome binary location (useful when Chrome is not on PATH).
+
+Why this works on Render:
+  Selenium Manager is bundled inside the selenium Python package itself
+  (at selenium/webdriver/common/linux/selenium-manager).  It runs as a
+  subprocess, downloads Chrome for Testing + ChromeDriver into a cache
+  directory inside the project, and returns the paths to the Python driver.
+  No root access, no apt-get, no pre-installed Chrome required.
 """
 
 import os
@@ -21,8 +28,6 @@ import logging
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +47,9 @@ def create_driver() -> webdriver.Chrome:
     """
     Create and return a configured Chrome WebDriver.
 
-    Both environments use webdriver-manager to locate ChromeDriver so there
-    is no dependency on a specific filesystem path.  The only difference
-    between environments is the set of Chrome options applied.
+    Selenium Manager (bundled with selenium >= 4.6) handles Chrome and
+    ChromeDriver download/location automatically on all platforms.
+    No Service() object is passed — Selenium resolves the driver path itself.
 
     Returns
     -------
@@ -58,7 +63,7 @@ def create_driver() -> webdriver.Chrome:
         # ------------------------------------------------------------------ #
         # Render / Linux — headless, sandbox-free options                    #
         # ------------------------------------------------------------------ #
-        logger.info("driver_factory: Linux/Render environment detected")
+        logger.info("driver_factory: Linux/Render environment — applying headless options")
 
         # Run without a display — required on headless servers
         chrome_options.add_argument("--headless=new")
@@ -79,31 +84,23 @@ def create_driver() -> webdriver.Chrome:
         chrome_options.add_argument("--disable-extensions")
         chrome_options.add_argument("--disable-background-networking")
 
-        # If CHROME_BIN is set, point Selenium at that binary explicitly.
-        # This handles cases where Chrome is installed to a non-standard path
-        # (e.g. /usr/bin/google-chrome-stable, /usr/bin/chromium-browser).
-        # If not set, Selenium will search PATH — which works when Chrome is
-        # installed by render-build.sh and is on PATH.
-        chrome_bin = os.environ.get("CHROME_BIN", "")
-        if chrome_bin:
-            chrome_options.binary_location = chrome_bin
-            logger.info(f"driver_factory: Chrome binary overridden to {chrome_bin}")
-        else:
-            logger.info("driver_factory: using Chrome from PATH")
-
-        # webdriver-manager downloads the matching ChromeDriver automatically.
-        # This is the same mechanism used on Windows and avoids any hardcoded
-        # path assumption — the root cause of the previous /usr/bin/chromedriver
-        # not found error.
-        service = Service(ChromeDriverManager().install())
-        logger.info("driver_factory: ChromeDriver resolved via webdriver-manager")
+        logger.info(
+            "driver_factory: no Service() passed — Selenium Manager will "
+            "auto-download Chrome + ChromeDriver for this platform"
+        )
 
     else:
         # ------------------------------------------------------------------ #
-        # Local Windows — original behaviour, completely unchanged            #
+        # Local Windows — no extra options, Selenium Manager handles driver  #
         # ------------------------------------------------------------------ #
-        logger.info("driver_factory: Windows environment detected")
-        service = Service(ChromeDriverManager().install())
+        logger.info(
+            "driver_factory: Windows environment — Selenium Manager will "
+            "locate or download ChromeDriver automatically"
+        )
 
-    driver = webdriver.Chrome(service=service, options=chrome_options)
+    # Do NOT pass a Service() argument.
+    # Selenium Manager (bundled in the selenium package) resolves Chrome and
+    # ChromeDriver automatically.  This works on Windows, Linux, and Render
+    # without any system-level Chrome installation or webdriver-manager calls.
+    driver = webdriver.Chrome(options=chrome_options)
     return driver
