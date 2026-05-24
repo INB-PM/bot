@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
@@ -6,11 +8,15 @@ import json
 import time
 
 
+BASE_DIR = Path(__file__).resolve().parent
+OUTPUT_DIR = BASE_DIR / "output"
+
+
 def run():
 
-    with open(
-        "output/links.json",
-        "r"
+    with (OUTPUT_DIR / "links.json").open(
+        "r",
+        encoding="utf-8"
     ) as f:
 
         links_data = json.load(f)
@@ -64,8 +70,9 @@ def run():
 
             print(f"Error: {url}")
 
-    with open(
-        "output/h1_tags.json",
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    with (OUTPUT_DIR / "h1_tags.json").open(
         "w",
         encoding="utf-8"
     ) as f:
