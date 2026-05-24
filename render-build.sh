@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # render-build.sh
 #
-# Deployment-specific build script for Render.com.
-# This script runs during the Render build phase (set as the "Build Command"
-# in the Render dashboard or render.yaml).
+# Build script for Render.com.
+# Set this as the "Build Command" in the Render dashboard or render.yaml.
 #
 # What it does:
-#   1. Installs Python dependencies from requirements.txt
-#   2. Installs Google Chrome Stable and its dependencies on Linux
-#   3. Installs ChromeDriver that matches the installed Chrome version
+#   1. Installs Python dependencies (including webdriver-manager, which will
+#      download ChromeDriver automatically at runtime — no manual install needed)
+#   2. Installs Google Chrome Stable on Linux
 #
-# Local Windows developers do NOT run this script — webdriver-manager handles
-# ChromeDriver automatically on Windows via driver_factory.py.
+# ChromeDriver is NOT installed here. webdriver-manager (called by
+# driver_factory.py at runtime) downloads the correct ChromeDriver version
+# automatically, matching whatever Chrome version is installed. This avoids
+# version mismatch errors and path assumption failures.
 
 set -e  # Exit immediately on any error
 
@@ -40,6 +41,7 @@ apt-get install -y \
     libxdamage1 \
     libxrandr2 \
     xdg-utils \
+    unzip \
     --no-install-recommends
 
 echo "==> Adding Google Chrome apt repository"
@@ -54,34 +56,8 @@ apt-get install -y google-chrome-stable --no-install-recommends
 echo "==> Verifying Chrome installation"
 google-chrome-stable --version
 
-echo "==> Installing ChromeDriver"
-# Derive the ChromeDriver version from the installed Chrome version.
-CHROME_VERSION=$(google-chrome-stable --version | grep -oP '\d+\.\d+\.\d+\.\d+')
-CHROME_MAJOR=$(echo "$CHROME_VERSION" | cut -d. -f1)
-
-echo "    Chrome version: $CHROME_VERSION (major: $CHROME_MAJOR)"
-
-# Chrome 115+ uses the Chrome for Testing endpoint
-if [ "$CHROME_MAJOR" -ge 115 ]; then
-    echo "==> Using Chrome for Testing endpoint (Chrome >= 115)"
-    CHROMEDRIVER_URL="https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip"
-    wget -q "$CHROMEDRIVER_URL" -O /tmp/chromedriver.zip
-    unzip -q /tmp/chromedriver.zip -d /tmp/
-    mv /tmp/chromedriver-linux64/chromedriver /usr/bin/chromedriver
-else
-    echo "==> Using legacy ChromeDriver endpoint (Chrome < 115)"
-    CHROMEDRIVER_VERSION=$(curl -sS "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_MAJOR}")
-    wget -q "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip" \
-        -O /tmp/chromedriver.zip
-    unzip -q /tmp/chromedriver.zip -d /tmp/
-    mv /tmp/chromedriver /usr/bin/chromedriver
-fi
-
-chmod +x /usr/bin/chromedriver
-echo "==> ChromeDriver installed:"
-chromedriver --version
-
 echo "==> Ensuring output directory exists"
 mkdir -p output
 
 echo "==> Build complete"
+echo "    ChromeDriver will be downloaded automatically by webdriver-manager at runtime."

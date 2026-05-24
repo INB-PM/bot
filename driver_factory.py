@@ -1,17 +1,18 @@
 """
 driver_factory.py — Reusable Selenium Chrome driver factory.
 
-Deployment-specific change: This module centralises all Chrome/Selenium
-setup so that extract_links.py and extract_h1.py do not duplicate driver
-configuration.  It detects whether the app is running on Render (or any
-Linux host) and applies the headless, sandbox-free options required there,
-while leaving Windows local behaviour completely unchanged.
+Works on both local Windows and Render/Linux without hardcoding paths.
 
-Environment detection logic:
-  - If the RENDER environment variable is set (Render injects it automatically)
-    OR the platform is Linux, treat the environment as a deployment host.
-  - Otherwise, assume a local Windows developer machine and use the default
-    Chrome installation via webdriver-manager, exactly as before.
+Strategy:
+  - webdriver-manager is used in BOTH environments to locate/download
+    ChromeDriver automatically.  This avoids any assumption about where
+    ChromeDriver is installed on the host.
+  - On Render/Linux, headless + sandbox-free Chrome options are added so
+    the browser can run without a display.
+  - On Windows, no extra options are applied — behaviour is identical to
+    the original code.
+  - If a CHROME_BIN environment variable is set, that path is used as the
+    Chrome binary location (useful when Chrome is not on PATH).
 """
 
 import os
@@ -27,16 +28,11 @@ logger = logging.getLogger(__name__)
 
 
 def _is_render_or_linux() -> bool:
-    """
-    Return True when running on Render or any Linux host.
-
-    Render sets the RENDER environment variable automatically.
-    The platform check catches other Linux CI/CD environments.
-    """
-    # RENDER env var is injected by Render for every service
+    """Return True when running on Render or any Linux host."""
+    # Render injects the RENDER env var automatically for every service
     if os.environ.get("RENDER"):
         return True
-    # Fallback: detect Linux platform (covers Docker, CI, etc.)
+    # Fallback: detect Linux (covers Docker, CI, other cloud hosts)
     if platform.system().lower() == "linux":
         return True
     return False
@@ -46,14 +42,9 @@ def create_driver() -> webdriver.Chrome:
     """
     Create and return a configured Chrome WebDriver.
 
-    Local Windows:
-        Uses webdriver-manager to locate/download the matching ChromeDriver.
-        No special Chrome options — behaves exactly as the original code did.
-
-    Render / Linux:
-        Uses the system Chrome binary installed by render-build.sh.
-        Applies headless and sandbox-free options required for a server
-        environment without a display.
+    Both environments use webdriver-manager to locate ChromeDriver so there
+    is no dependency on a specific filesystem path.  The only difference
+    between environments is the set of Chrome options applied.
 
     Returns
     -------
@@ -65,48 +56,53 @@ def create_driver() -> webdriver.Chrome:
 
     if _is_render_or_linux():
         # ------------------------------------------------------------------ #
-        # Deployment-specific Chrome options (Render / Linux only)           #
+        # Render / Linux — headless, sandbox-free options                    #
         # ------------------------------------------------------------------ #
-        logger.info("driver_factory: configuring Chrome for Render/Linux environment")
+        logger.info("driver_factory: Linux/Render environment detected")
 
         # Run without a display — required on headless servers
         chrome_options.add_argument("--headless=new")
 
-        # Required in Docker / Render containers (no kernel namespace support)
+        # Required in containers — no kernel namespace support
         chrome_options.add_argument("--no-sandbox")
 
-        # /dev/shm is often too small in containers; use /tmp instead
+        # /dev/shm is often too small in containers; fall back to /tmp
         chrome_options.add_argument("--disable-dev-shm-usage")
 
-        # GPU acceleration is unavailable on headless servers
+        # No GPU on headless servers
         chrome_options.add_argument("--disable-gpu")
 
-        # Set a consistent viewport so page layout is predictable
+        # Consistent viewport for predictable page layout
         chrome_options.add_argument("--window-size=1920,1080")
 
-        # Disable extensions and background networking to reduce resource use
+        # Reduce resource usage in a shared container environment
         chrome_options.add_argument("--disable-extensions")
         chrome_options.add_argument("--disable-background-networking")
 
-        # Point to the system Chrome installed by render-build.sh
-        # The CHROME_BIN env var lets operators override the path if needed.
-        chrome_bin = os.environ.get("CHROME_BIN", "/usr/bin/google-chrome-stable")
-        chrome_options.binary_location = chrome_bin
-        logger.info(f"driver_factory: using Chrome binary at {chrome_bin}")
+        # If CHROME_BIN is set, point Selenium at that binary explicitly.
+        # This handles cases where Chrome is installed to a non-standard path
+        # (e.g. /usr/bin/google-chrome-stable, /usr/bin/chromium-browser).
+        # If not set, Selenium will search PATH — which works when Chrome is
+        # installed by render-build.sh and is on PATH.
+        chrome_bin = os.environ.get("CHROME_BIN", "")
+        if chrome_bin:
+            chrome_options.binary_location = chrome_bin
+            logger.info(f"driver_factory: Chrome binary overridden to {chrome_bin}")
+        else:
+            logger.info("driver_factory: using Chrome from PATH")
 
-        # Use the system ChromeDriver installed alongside Chrome.
-        # CHROMEDRIVER_PATH can be overridden via environment variable.
-        chromedriver_path = os.environ.get("CHROMEDRIVER_PATH", "/usr/bin/chromedriver")
-        service = Service(chromedriver_path)
+        # webdriver-manager downloads the matching ChromeDriver automatically.
+        # This is the same mechanism used on Windows and avoids any hardcoded
+        # path assumption — the root cause of the previous /usr/bin/chromedriver
+        # not found error.
+        service = Service(ChromeDriverManager().install())
+        logger.info("driver_factory: ChromeDriver resolved via webdriver-manager")
 
     else:
         # ------------------------------------------------------------------ #
         # Local Windows — original behaviour, completely unchanged            #
         # ------------------------------------------------------------------ #
-        logger.info("driver_factory: configuring Chrome for local Windows environment")
-
-        # webdriver-manager downloads the correct ChromeDriver automatically,
-        # matching the locally installed Chrome version — same as before.
+        logger.info("driver_factory: Windows environment detected")
         service = Service(ChromeDriverManager().install())
 
     driver = webdriver.Chrome(service=service, options=chrome_options)
