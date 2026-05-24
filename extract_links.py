@@ -1,8 +1,14 @@
+from pathlib import Path
+
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service
 import json
+
+
+BASE_DIR = Path(__file__).resolve().parent
+OUTPUT_DIR = BASE_DIR / "output"
 
 
 def run():
@@ -64,9 +70,11 @@ def run():
                     "link": href
                 })
 
-    with open(
-        "output/links.json",
-        "w"
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    with (OUTPUT_DIR / "links.json").open(
+        "w",
+        encoding="utf-8"
     ) as f:
 
         json.dump(
